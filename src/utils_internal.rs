@@ -1,5 +1,5 @@
 #[cfg(feature = "bluetooth-le")]
-use crate::connections::ble_handler::BleHandler;
+use crate::connections::ble_handler::{BleHandler, BleId};
 use crate::errors_internal::Error;
 #[cfg(feature = "bluetooth-le")]
 use futures::stream::StreamExt;
