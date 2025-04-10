@@ -91,6 +91,7 @@ impl BleHandler {
                 services: vec![MSH_SERVICE],
             })
             .await?;
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         adapter.peripherals().await
     }
 
