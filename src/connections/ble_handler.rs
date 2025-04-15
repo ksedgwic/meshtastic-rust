@@ -68,6 +68,63 @@ impl Display for BleId {
 
 #[allow(dead_code)]
 impl BleHandler {
+    /// Returns a stream of RadioMessage packets:
+    /// - Subscribes to notifications from 'fromnum'
+    /// - On each notification, reads packets from 'fromradio' until Eof
+    pub async fn packet_stream(&self) -> Result<BoxStream<'static, RadioMessage>, Error> {
+        use futures_channel::mpsc;
+        use futures_util::StreamExt;
+
+        // Subscribe to fromnum notifications
+        self.radio
+            .subscribe(&self.fromnum_char)
+            .await
+            .map_err(Self::ble_read_error_fn)?;
+
+        let mut notifications = self
+            .radio
+            .notifications()
+            .await
+            .map_err(Self::ble_read_error_fn)?;
+
+        // Create a channel to send out RadioMessages
+        let (tx, rx) = mpsc::unbounded();
+
+        let handler = self.clone_for_spawn();
+
+        tokio::spawn(async move {
+            while let Some(notification) = notifications.next().await {
+                if notification.uuid == FROMNUM {
+                    // On every fromnum notify, read fromradio until Eof/error
+                    loop {
+                        match handler.read_from_radio().await {
+                            Ok(RadioMessage::Packet(pkt)) => {
+                                let _ = tx.unbounded_send(RadioMessage::Packet(pkt));
+                            }
+                            Ok(RadioMessage::Eof) | Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Box::pin(futures_util::stream::unfold(rx, |mut rx| async {
+            rx.next().await.map(|msg| (msg, rx))
+        })))
+    }
+
+    /// Helper to get a cloneable handler for spawning background tasks.
+    /// (You may need to change BleHandler's fields to Arc<T> so this works.)
+    fn clone_for_spawn(&self) -> BleHandler {
+        BleHandler {
+            radio: self.radio.clone(),
+            adapter: self.adapter.clone(),
+            toradio_char: self.toradio_char.clone(),
+            fromradio_char: self.fromradio_char.clone(),
+            fromnum_char: self.fromnum_char.clone(),
+        }
+    }
+
     pub async fn new(ble_id: &BleId) -> Result<Self, Error> {
         let (radio, adapter) = Self::find_ble_radio(ble_id).await?;
         radio.connect().await.map_err(|e| Error::StreamBuildError {

@@ -240,8 +240,6 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
         errors_internal::InternalStreamError,
     };
     let ble_handler = BleHandler::new(ble_id).await?;
-    // `client` will be returned to the user, server is the opposite end of the channel and it's
-    // directly connected to a `BleHandler`.
     let (client, mut server) = tokio::io::duplex(1024);
     let handle = tokio::spawn(async move {
         let duplex_write_error_fn = |e| {
@@ -249,42 +247,22 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
                 source: Box::new(e),
             })
         };
-        let mut read_messages_count = ble_handler.read_fromnum().await?;
         let mut buf = [0u8; 1024];
-        if let Ok(len) = server.read(&mut buf).await {
-            ble_handler.write_to_radio(&buf[..len]).await?
-        }
-        loop {
-            match ble_handler.read_from_radio().await? {
-                RadioMessage::Eof => break,
-                RadioMessage::Packet(packet) => {
-                    server
-                        .write(packet.data())
-                        .await
-                        .map_err(duplex_write_error_fn)?;
-                }
-            }
-        }
 
-        let mut notification_stream = ble_handler.notifications().await?;
+        // Forwards packets from BLE to user
+        let mut packet_stream = ble_handler.packet_stream().await?;
         let mut adapter_events = ble_handler.adapter_events().await?;
         loop {
-            // Note: the following `tokio::select` is only half-duplex on the BLE radio. While we
-            // are reading from the radio, we are not writing to it and vice versa. However, BLE is
-            // a half-duplex technology, so we wouldn't gain much with a full duplex solution
-            // anyway.
-            tokio::select!(
-                // Data from device, forward it to the user
-                notification = notification_stream.next() => {
-                    let avail_msg_count = notification.ok_or(InternalStreamError::Eof)?;
-                    for _ in read_messages_count..avail_msg_count {
-                        if let RadioMessage::Packet(packet) = ble_handler.read_from_radio().await? {
-                            server.write(packet.data()).await.map_err(duplex_write_error_fn)?;
-                        }
+            tokio::select! {
+                // Process BLE incoming packets
+                packet = packet_stream.next() => {
+                    if let Some(RadioMessage::Packet(packet)) = packet {
+                        server.write(packet.data()).await.map_err(duplex_write_error_fn)?;
+                    } else if packet.is_none() {
+                        break;
                     }
-                    read_messages_count = avail_msg_count;
                 },
-                // Data from user, forward it to the device
+                // Process data from user to BLE radio
                 from_server = server.read(&mut buf) => {
                     let len = from_server.map_err(duplex_write_error_fn)?;
                     ble_handler.write_to_radio(&buf[..len]).await?;
@@ -295,15 +273,16 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
                         Err(InternalStreamError::ConnectionLost)?
                     }
                 }
-            );
+            }
         }
+        Ok::<(), Error>(())
     });
-
     Ok(StreamHandle {
         stream: client,
         join_handle: Some(handle),
     })
 }
+
 
 /// A helper method to generate random numbers using the `rand` crate.
 ///

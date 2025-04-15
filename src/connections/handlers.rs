@@ -58,8 +58,9 @@ where
         let mut buffer = [0u8; 1024];
         match read_stream.read(&mut buffer).await {
             Ok(0) => {
-                warn!("read_stream has reached EOF");
-                return Err(Error::InternalStreamError(InternalStreamError::Eof));
+                warn!("read_stream returned 0 bytes (possible BLE idle), waiting for data...");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
             }
             Ok(n) => {
                 trace!("Read {} bytes from stream", n);
