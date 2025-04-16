@@ -227,15 +227,26 @@ impl BleHandler {
     }
 
     pub async fn write_to_radio(&self, buffer: &[u8]) -> Result<(), Error> {
-        self.radio
-            // TODO: remove the skipping of the first 4 bytes
-            .write(&self.toradio_char, &buffer[4..], WriteType::WithResponse)
-            .await
-            .map_err(|e: btleplug::Error| {
-                Error::InternalStreamError(InternalStreamError::StreamWriteError {
+        use log::{debug, error};
+        let bytes_to_write = &buffer[4..];
+        debug!("BLE: About to write {} bytes to toradio characteristic", bytes_to_write.len());
+
+        let result = self.radio
+            .write(&self.toradio_char, bytes_to_write, WriteType::WithResponse)
+            .await;
+
+        match result {
+            Ok(_) => {
+                debug!("BLE: Write to toradio succeeded ({} bytes)", bytes_to_write.len());
+                Ok(())
+            }
+            Err(e) => {
+                error!("BLE: Write to toradio FAILED ({} bytes): {:?}", bytes_to_write.len(), e);
+                Err(Error::InternalStreamError(InternalStreamError::StreamWriteError {
                     source: Box::new(e),
-                })
-            })
+                }))
+            }
+        }
     }
 
     fn ble_read_error_fn(e: btleplug::Error) -> Error {

@@ -128,12 +128,24 @@ where
 
     while let Some(message) = write_input_rx.recv().await {
         trace!("Writing packet data: {:?}", message);
-        debug!("Attempting to write packet to stream ({} bytes)", message.data().len());
+        debug!(
+            "Attempting to write packet to stream ({} bytes)",
+            message.data().len()
+        );
         let write_res = write_stream.write(message.data()).await;
         match write_res {
-            Ok(_) => { /* success */ }
-            Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe || e.kind() == std::io::ErrorKind::NotConnected => {
-                warn!("BrokenPipe or NotConnected on BLE write; will retry after delay: {:?}", e);
+            Ok(_) => {
+                debug!("Initial attempt succeeded");
+                /* success */
+            }
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::BrokenPipe
+                    || e.kind() == std::io::ErrorKind::NotConnected =>
+            {
+                warn!(
+                    "BrokenPipe or NotConnected on BLE write; will retry after delay: {:?}",
+                    e
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 // Try one more time
                 match write_stream.write(message.data()).await {
