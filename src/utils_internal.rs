@@ -249,6 +249,11 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
         };
         let mut buf = [0u8; 1024];
 
+        // Add startup delay before first write to ensure BLE device is ready
+        log::debug!("BLE: Waiting 1s after connection so device is ready for writes...");
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        log::debug!("BLE: Startup delay done; proceeding to stream loop.");
+
         // Forwards packets from BLE to user
         let mut packet_stream = ble_handler.packet_stream().await?;
         let mut adapter_events = ble_handler.adapter_events().await?;
@@ -265,6 +270,7 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
                 // Process data from user to BLE radio
                 from_server = server.read(&mut buf) => {
                     let len = from_server.map_err(duplex_write_error_fn)?;
+                    log::debug!("BLE: About to write {} bytes to BLE radio...", len);
                     ble_handler.write_to_radio(&buf[..len]).await?;
                 },
                 event = adapter_events.next() => {
