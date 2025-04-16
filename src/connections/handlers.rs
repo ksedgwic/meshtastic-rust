@@ -128,14 +128,37 @@ where
 
     while let Some(message) = write_input_rx.recv().await {
         trace!("Writing packet data: {:?}", message);
-
-        if let Err(e) = write_stream.write(message.data()).await {
-            error!("Error writing to stream: {:?}", e);
-            return Err(Error::InternalStreamError(
-                InternalStreamError::StreamWriteError {
-                    source: Box::new(e),
-                },
-            ));
+        debug!("Attempting to write packet to stream ({} bytes)", message.data().len());
+        let write_res = write_stream.write(message.data()).await;
+        match write_res {
+            Ok(_) => { /* success */ }
+            Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe || e.kind() == std::io::ErrorKind::NotConnected => {
+                warn!("BrokenPipe or NotConnected on BLE write; will retry after delay: {:?}", e);
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                // Try one more time
+                match write_stream.write(message.data()).await {
+                    Ok(_) => {
+                        debug!("Retry succeeded after BrokenPipe");
+                        continue;
+                    }
+                    Err(e) => {
+                        error!("Error writing to stream after retry: {:?}", e);
+                        return Err(Error::InternalStreamError(
+                            InternalStreamError::StreamWriteError {
+                                source: Box::new(e),
+                            },
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Error writing to stream: {:?}", e);
+                return Err(Error::InternalStreamError(
+                    InternalStreamError::StreamWriteError {
+                        source: Box::new(e),
+                    },
+                ));
+            }
         }
     }
 
