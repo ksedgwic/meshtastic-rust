@@ -254,6 +254,9 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         log::debug!("BLE: Startup delay done; proceeding to stream loop.");
 
+        // Mimic official app: read fromnum before writing to BLE
+        let _ = ble_handler.read_fromnum().await;
+
         // Forwards packets from BLE to user
         let mut packet_stream = ble_handler.packet_stream().await?;
         let mut adapter_events = ble_handler.adapter_events().await?;
