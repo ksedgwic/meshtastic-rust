@@ -257,41 +257,56 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
         // Mimic official app: read fromnum before writing to BLE
         let _ = ble_handler.read_fromnum().await;
 
-        // Forwards packets from BLE to user
-        let mut packet_stream = ble_handler.packet_stream().await?;
-        let mut adapter_events = ble_handler.adapter_events().await?;
-        loop {
-            tokio::select! {
-                // Process BLE incoming packets
-                packet = packet_stream.next() => {
-                    if let Some(RadioMessage::Packet(packet)) = packet {
-                        server.write(packet.data()).await.map_err(duplex_write_error_fn)?;
-                    } else if packet.is_none() {
-                        break;
-                    }
-                },
-                // Process data from user to BLE radio
-                from_server = server.read(&mut buf) => {
-                    let len = from_server.map_err(duplex_write_error_fn)?;
-                    log::debug!("BLE: About to write {} bytes to BLE radio...", len);
-                    ble_handler.write_to_radio(&buf[..len]).await?;
-                },
-                event = adapter_events.next() => {
-                    if Some(AdapterEvent::Disconnected) == event {
-                        log::error!("BLE disconnected");
-                        Err(InternalStreamError::ConnectionLost)?
+        // Comprehensive error/success logging for BLE stream loop
+        let inner_res = async {
+            // Forwards packets from BLE to user
+            let mut packet_stream = ble_handler.packet_stream().await?;
+            let mut adapter_events = ble_handler.adapter_events().await?;
+            loop {
+                tokio::select! {
+                    // Process BLE incoming packets
+                    packet = packet_stream.next() => {
+                        if let Some(RadioMessage::Packet(packet)) = packet {
+                            server.write(packet.data()).await.map_err(duplex_write_error_fn)?;
+                        } else if packet.is_none() {
+                            log::info!("BLE stream loop is breaking: packet_stream.next() returned None (EOF)");
+                            break;
+                        }
+                    },
+                    // Process data from user to BLE radio
+                    from_server = server.read(&mut buf) => {
+                        let len = from_server.map_err(duplex_write_error_fn)?;
+                        log::debug!("BLE: About to write {} bytes to BLE radio...", len);
+                        ble_handler.write_to_radio(&buf[..len]).await?;
+                    },
+                    event = adapter_events.next() => {
+                        if Some(AdapterEvent::Disconnected) == event {
+                            log::error!("BLE disconnected");
+                            Err(InternalStreamError::ConnectionLost)?
+                        }
                     }
                 }
             }
+            Ok::<(), Error>(())
+        }.await;
+
+        match inner_res {
+            Ok(()) => {
+                log::info!("BLE stream inner task exited cleanly.");
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("BLE stream inner task exited with ERROR: {:?}", e);
+                Err(e)
+            }
         }
-        Ok::<(), Error>(())
     });
+
     Ok(StreamHandle {
         stream: client,
         join_handle: Some(handle),
     })
 }
-
 
 /// A helper method to generate random numbers using the `rand` crate.
 ///
