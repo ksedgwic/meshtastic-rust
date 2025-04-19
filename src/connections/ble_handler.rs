@@ -74,13 +74,16 @@ impl BleHandler {
     pub async fn packet_stream(&self) -> Result<BoxStream<'static, RadioMessage>, Error> {
         use futures_channel::mpsc;
         use futures_util::StreamExt;
+        use log::debug;
 
         // Subscribe to fromnum notifications
+        debug!("subscribing to fromnum notifications");
         self.radio
             .subscribe(&self.fromnum_char)
             .await
             .map_err(Self::ble_read_error_fn)?;
 
+        debug!("calling radio.notifications");
         let mut notifications = self
             .radio
             .notifications()
@@ -93,12 +96,15 @@ impl BleHandler {
         let handler = self.clone_for_spawn();
 
         tokio::spawn(async move {
+            debug!("entering notification loop");
             while let Some(notification) = notifications.next().await {
                 if notification.uuid == FROMNUM {
                     // On every fromnum notify, read fromradio until Eof/error
+                    debug!("saw FROMNUM, reading from radio");
                     loop {
                         match handler.read_from_radio().await {
                             Ok(RadioMessage::Packet(pkt)) => {
+                                debug!("sending packet to channel");
                                 let _ = tx.unbounded_send(RadioMessage::Packet(pkt));
                             }
                             Ok(RadioMessage::Eof) | Err(_) => break,
@@ -229,22 +235,35 @@ impl BleHandler {
     pub async fn write_to_radio(&self, buffer: &[u8]) -> Result<(), Error> {
         use log::{debug, error};
         let bytes_to_write = &buffer[4..];
-        debug!("BLE: About to write {} bytes to toradio characteristic", bytes_to_write.len());
+        debug!(
+            "BLE: About to write {} bytes to toradio characteristic",
+            bytes_to_write.len()
+        );
 
-        let result = self.radio
+        let result = self
+            .radio
             .write(&self.toradio_char, bytes_to_write, WriteType::WithResponse)
             .await;
 
         match result {
             Ok(_) => {
-                debug!("BLE: Write to toradio succeeded ({} bytes)", bytes_to_write.len());
+                debug!(
+                    "BLE: Write to toradio succeeded ({} bytes)",
+                    bytes_to_write.len()
+                );
                 Ok(())
             }
             Err(e) => {
-                error!("BLE: Write to toradio FAILED ({} bytes): {:?}", bytes_to_write.len(), e);
-                Err(Error::InternalStreamError(InternalStreamError::StreamWriteError {
-                    source: Box::new(e),
-                }))
+                error!(
+                    "BLE: Write to toradio FAILED ({} bytes): {:?}",
+                    bytes_to_write.len(),
+                    e
+                );
+                Err(Error::InternalStreamError(
+                    InternalStreamError::StreamWriteError {
+                        source: Box::new(e),
+                    },
+                ))
             }
         }
     }

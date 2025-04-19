@@ -3,6 +3,7 @@ use crate::connections::ble_handler::{BleHandler, BleId};
 use crate::errors_internal::Error;
 #[cfg(feature = "bluetooth-le")]
 use futures::stream::StreamExt;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
@@ -234,7 +235,10 @@ pub async fn build_tcp_stream(
 /// None
 ///
 #[cfg(feature = "bluetooth-le")]
-pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStream>, Error> {
+pub async fn build_ble_stream(
+    ble_id: &BleId,
+    condition_thread: Arc<dyn Fn() + Send + Sync + 'static>,
+) -> Result<StreamHandle<DuplexStream>, Error> {
     use crate::{
         connections::ble_handler::{AdapterEvent, RadioMessage},
         errors_internal::InternalStreamError,
@@ -242,6 +246,9 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
     let ble_handler = BleHandler::new(ble_id).await?;
     let (client, mut server) = tokio::io::duplex(1024);
     let handle = tokio::spawn(async move {
+        // ensure the thread is JNI-conditioned
+        condition_thread();
+
         let duplex_write_error_fn = |e| {
             Error::InternalStreamError(InternalStreamError::StreamWriteError {
                 source: Box::new(e),
@@ -255,17 +262,23 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
         log::debug!("BLE: Startup delay done; proceeding to stream loop.");
 
         // Mimic official app: read fromnum before writing to BLE
+        log::debug!("throwaway read to mimic official app");
         let _ = ble_handler.read_fromnum().await;
+        log::debug!("after throwaway read");
 
         // Comprehensive error/success logging for BLE stream loop
         let inner_res = async {
             // Forwards packets from BLE to user
+            log::debug!("get packet_stream");
             let mut packet_stream = ble_handler.packet_stream().await?;
+            log::debug!("get adapter_events");
             let mut adapter_events = ble_handler.adapter_events().await?;
+            log::debug!("entering loop");
             loop {
                 tokio::select! {
                     // Process BLE incoming packets
                     packet = packet_stream.next() => {
+                        log::debug!("saw packet_stream.next()");
                         if let Some(RadioMessage::Packet(packet)) = packet {
                             server.write(packet.data()).await.map_err(duplex_write_error_fn)?;
                         } else if packet.is_none() {
@@ -275,11 +288,13 @@ pub async fn build_ble_stream(ble_id: &BleId) -> Result<StreamHandle<DuplexStrea
                     },
                     // Process data from user to BLE radio
                     from_server = server.read(&mut buf) => {
+                        log::debug!("saw server.read()");
                         let len = from_server.map_err(duplex_write_error_fn)?;
                         log::debug!("BLE: About to write {} bytes to BLE radio...", len);
                         ble_handler.write_to_radio(&buf[..len]).await?;
                     },
                     event = adapter_events.next() => {
+                        log::debug!("saw adapter_events.next()");
                         if Some(AdapterEvent::Disconnected) == event {
                             log::error!("BLE disconnected");
                             Err(InternalStreamError::ConnectionLost)?
