@@ -495,6 +495,71 @@ pub fn current_epoch_secs_u32() -> u32 {
         .expect("Could not convert u128 to u32")
 }
 
+/// A helper method that enumerates all available BLE radios and returns a vector of unique
+/// `BleId` identifiers. This routine is only available when the library is compiled with
+/// the `bluetooth-le` feature.
+///
+/// # Returns
+///
+/// A result containing a vector of `BleId` objects representing each detected
+/// BLE device, or an error if the device list could not be retrieved.
+///
+/// # Examples
+///
+/// ```
+/// // Retrieve a list of BLE radios
+/// let radios = utils::available_ble_radios()?;
+/// for radio in &radios {
+///     println!("Found radio: {:?}", radio);
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Will return an instance of `Error` if the BLE radio enumeration process fails.
+///
+/// # Panics
+///
+/// None
+///
+#[cfg(feature = "bluetooth-le")]
+pub async fn available_ble_radios(scan_duration: Duration) -> Result<Vec<BleId>, Error> {
+    use btleplug::api::{Manager as ApiManager, Peripheral as ApiPeripheral};
+    use btleplug::platform::Manager;
+
+    let mut radios = Vec::new();
+    let manager = Manager::new().await.map_err(|e| Error::StreamBuildError {
+        source: Box::new(e),
+        description: "Failed to initialize BLE Manager".to_string(),
+    })?;
+    let adapters = manager
+        .adapters()
+        .await
+        .map_err(|e| Error::StreamBuildError {
+            source: Box::new(e),
+            description: "Failed to list BLE adapters".to_string(),
+        })?;
+    for adapter in adapters {
+        match BleHandler::scan_peripherals(&adapter, scan_duration).await {
+            Ok(peripherals) => {
+                for p in peripherals {
+                    if let Ok(Some(props)) = p.properties().await {
+                        if let Some(ref name) = props.local_name {
+                            radios.push(BleId::from_name(name));
+                        } else {
+                            radios.push(BleId::MacAddress(props.address));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to scan peripherals: {:?}", e);
+            }
+        }
+    }
+    Ok(radios)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

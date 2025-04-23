@@ -86,7 +86,7 @@ impl BleHandler {
         })
     }
 
-    async fn scan_peripherals(
+    pub(crate) async fn scan_peripherals(
         adapter: &Adapter,
         scan_duration: Duration,
     ) -> Result<Vec<Peripheral>, btleplug::Error> {
