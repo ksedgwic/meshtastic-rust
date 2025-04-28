@@ -252,7 +252,7 @@ pub async fn build_ble_stream(
                 source: Box::new(e),
             })
         };
-        let mut read_messages_count = ble_handler.read_fromnum().await?;
+        let mut _read_messages_count = ble_handler.read_fromnum().await?;
         let mut buf = [0u8; 1024];
         if let Ok(len) = server.read(&mut buf).await {
             ble_handler.write_to_radio(&buf[..len]).await?
@@ -280,12 +280,20 @@ pub async fn build_ble_stream(
                 // Data from device, forward it to the user
                 notification = notification_stream.next() => {
                     let avail_msg_count = notification.ok_or(InternalStreamError::Eof)?;
-                    for _ in read_messages_count..avail_msg_count {
-                        if let RadioMessage::Packet(packet) = ble_handler.read_from_radio().await? {
-                            server.write(packet.data()).await.map_err(duplex_write_error_fn)?;
+                    loop {
+                        let msg = ble_handler.read_from_radio().await?;
+                        match msg {
+                            RadioMessage::Eof => break,  // done for now
+                            RadioMessage::Packet(packet) => {
+                                let data_len = packet.data().len();
+                                log::trace!(
+                                    "read_from_radio saw {} byte packet, writing to handler",
+                                    data_len);
+                                server.write(packet.data()).await.map_err(duplex_write_error_fn)?;
+                            }
                         }
                     }
-                    read_messages_count = avail_msg_count;
+                    _read_messages_count = avail_msg_count;
                 },
                 // Data from user, forward it to the device
                 from_server = server.read(&mut buf) => {
