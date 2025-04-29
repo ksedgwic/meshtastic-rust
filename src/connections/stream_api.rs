@@ -170,8 +170,9 @@ impl<State> ConnectedStreamApi<State> {
         echo_response: bool,
         reply_id: Option<u32>,
         emoji: Option<u32>,
-    ) -> Result<(), Error> {
+    ) -> Result<u32, Error> {
         let own_node_id = packet_router.source_node_id();
+        let mesh_packet_id = generate_rand_id();
 
         let packet_destination: NodeId = match destination {
             PacketDestination::Local => own_node_id,
@@ -192,7 +193,7 @@ impl<State> ConnectedStreamApi<State> {
             )),
             from: own_node_id.id(),
             to: packet_destination.id(),
-            id: generate_rand_id(),
+            id: mesh_packet_id,
             want_ack,
             channel: channel.channel(),
             ..Default::default()
@@ -210,7 +211,7 @@ impl<State> ConnectedStreamApi<State> {
         let payload_variant = Some(protobufs::to_radio::PayloadVariant::Packet(mesh_packet));
         self.send_to_radio_packet(payload_variant).await?;
 
-        Ok(())
+        Ok(mesh_packet_id)
     }
 
     /// A helper method to send a raw `ToRadio` packet to the radio based on a provided `protobufs::to_radio::PayloadVariant`.
